@@ -16,14 +16,25 @@ int main(int argc,char **args)
 
   InitializePetscVector();
   cout<<"InitializePetscVector"<<endl;
+  UpdateTransportCoefficients() ;
+  cout<<"UpdateTransportCoefficients"<<endl;
+  InitialCondition() ;
+  cout<<"InitialCondition"<<endl;
 
-  Poisson_eqn( 0.0, 100.0 ) ;
-  ComputeElectricField( 0.0, 100.0 ) ;
-  output("flow2.dat");
+  for ( int iCycle=0 ; iCycle <   1 ; iCycle++ ){
+    for (int iStep=0 ; iStep < 100 ; iStep++ ) {
+
+      Poisson_eqn( 0.0, 0.0 ) ;
+      ComputeElectricField( 0.0, 0.0 ) ;
+      electron_continuity_eqn() ;
+    }//End step
+    output("flow-"+to_string(iCycle)+".dat" ) ;
+  }//End cycle
 
 
 
-  convection_diffusion_eqn(); 
+  PetscEnd();
+  //convection_diffusion_eqn(); 
   cout<<"convection_diffusion_eqn"<<endl;
 
 
