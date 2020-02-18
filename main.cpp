@@ -13,14 +13,21 @@ int main(int argc,char **args)
 
   InitializeLinearSystemSolver() ;
   cout<<"InitializeLinearSystemSolver"<<endl;
+
   InitializePetscVector();
   cout<<"InitializePetscVector"<<endl;
+
+  Poisson_eqn( 0.0, 100.0 ) ;
+  ComputeElectricField( 0.0, 100.0 ) ;
+  output("flow2.dat");
+
+
+
   convection_diffusion_eqn(); 
   cout<<"convection_diffusion_eqn"<<endl;
-  //PetscEnd();
-  Poisson_eqn(100.0) ;
+
+
   
-  output("flow2.dat");
 
   PetscFinalize();
   return 0 ;

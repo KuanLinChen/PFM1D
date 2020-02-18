@@ -46,7 +46,7 @@ PetscMPIInt mpi_rank,
 /* Declaration of Linear system Solver */
 LinearSysSolver poisson, electron_continuity, electron_energy, ion_continuity ;
 
-Vec potential, Mu_e, D_e, Mu_i, D_i, Ex, Ee, Ew, gVec, N_e, N_i ;
+Vec potential, Mu_e, D_e, Mu_i, D_i, Ex, Ee, Ew, gVec, gField[2], N_e, N_i ;
 Species ele, ion ;
 /**/
 PetscScalar me = 9.10938356E-31 ;
@@ -58,7 +58,7 @@ void CreatePetscDMDA_1D();
 void CreateMesh_1D();
 void InitializeLinearSystemSolver();
 void InitializePetscVector();
-void Poisson_eqn(PetscScalar);
+void Poisson_eqn( PetscScalar, PetscScalar ) ;
 void electron_continuity_eqn();
 void convection_diffusion_eqn();
 void output(string);
@@ -89,17 +89,17 @@ void CreatePetscDMDA_1D()
 
 void CreateMesh_1D()
 {
-	//Note: all processor have same mesh informations.
+	/* Note: all processor have same mesh informations. */
 	x  = new PetscScalar [nNode] ;
 	xc = new PetscScalar [nCell] ;
 	dx = new PetscScalar [nCell] ;
 	
 	/* hyperbolic tangent stretching scheme */
 	for ( PetscInt i = 0 ; i < nNode ; i++ ) {
-		x[ i ] = 0.5*gap_length*( 1.0 + tanh( mesh_factor*( (PetscScalar)i/nCell-0.5 ) ) /tanh(0.5*mesh_factor) );
-		//PetscPrintf(PETSC_COMM_SELF, "x: %e\n", x[i] ) ;
-		PetscPrintf(PETSC_COMM_SELF, " %15.6e \t  3 \n", x[i] ) ;
+		x[ i ] = 0.5*gap_length*( 1.0 + tanh( mesh_factor*( (PetscScalar)i/nCell-0.5 ) ) /tanh(0.5*mesh_factor) ) ;
+		//PetscPrintf(PETSC_COMM_SELF, " %15.6e \t  3 \n", x[i] ) ;
 	}
+
 	/* cell center. */
 	for( PetscInt i= 0 ; i < nCell ; i++ ) {
 		xc[ i ] = 0.5*( x[i]+x[i+1] ) ;
@@ -154,7 +154,8 @@ void InitializeLinearSystemSolver()
 void InitializePetscVector()
 {
 	DMCreateGlobalVector( da, &gVec ) ;
-
+	DMCreateGlobalVector( da, &gField[0] ) ;
+	DMCreateGlobalVector( da, &gField[1] ) ;
 
 	//electrostatic 
 	DMCreateLocalVector ( da, &potential ) ;//cell center potential.
@@ -184,10 +185,9 @@ void UpdateTransportCoefficients()
 	VecSet( ion.D , 4.0E-3/Pressure_in_torr) ;
 
 }
-void Poisson_eqn( PetscScalar voltage )
+void Poisson_eqn( PetscScalar left_voltage, PetscScalar right_voltage )
 {
 	MatStencil  row, col[3] ;
-	PetscInt count_col ;
 	PetscScalar v[3], d1, d2, *source ;
 
 	DMDAVecGetArray( da, poisson.B, &source ) ;
@@ -195,8 +195,6 @@ void Poisson_eqn( PetscScalar voltage )
 	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
 		source[ i ] = 0.0 ;
 		row.i = i ;
-
-		count_col = 0 ;
 
 		for ( int k=0 ; k < 3 ; k++ ) v[k]=0.0;
 
@@ -214,9 +212,9 @@ void Poisson_eqn( PetscScalar voltage )
 			//wFace 
 			d2 = 0.5*dx[ i ] ;
 			v[0] +=  -1.0/(d2) ;
-			//source = -1.0/(d1+d2)*0.0  alwaws ground.
 
 			MatSetValuesStencil( poisson.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
+			source[ i ] = -1.0/(d1)*left_voltage ;
 
 		}else if( i == nCell-1 ) {
 
@@ -234,7 +232,7 @@ void Poisson_eqn( PetscScalar voltage )
 			v[1] +=  -1.0/(d1) ;
 
 			MatSetValuesStencil( poisson.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
-			source[ i ] = -1.0/(d1)*voltage ;
+			source[ i ] = -1.0/(d1)*right_voltage ;
 
 		} else {
 
@@ -264,8 +262,68 @@ void Poisson_eqn( PetscScalar voltage )
 	MatAssemblyBegin(poisson.A, MAT_FINAL_ASSEMBLY);
 	MatAssemblyEnd(poisson.A, MAT_FINAL_ASSEMBLY);
 	KSPSolve( poisson.ksp, poisson.B, poisson.x );
-	//VecView(poisson.x, PETSC_VIEWER_STDOUT_WORLD ) ;
-	//DMGlobalToLocal( da, Vec g,InsertMode mode,Vec l)
+
+	/* Update ghost cell value */
+	DMGlobalToLocal( da, poisson.x, INSERT_VALUES, potential ) ;
+}
+void ComputeElectricField( PetscScalar left_voltage, PetscScalar right_voltage )
+{
+	PetscScalar *phi, *E_e, *E_w, *E_c, d1, d2 ;
+
+	DMDAVecGetArray( da, potential, &phi ) ;
+
+	DMDAVecGetArray( da,      gVec, &E_c ) ;
+	DMDAVecGetArray( da, gField[0], &E_e ) ;
+	DMDAVecGetArray( da, gField[1], &E_w ) ;
+
+	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
+
+		if ( i==0 ) {
+			//
+			d1 = 0.5*dx[ i ] ;
+			d2 = 0.5*dx[i+1] ;
+			E_e[ i ] = -( phi[i+1] - phi[ i ] )/( d1+d2 ) ;
+			//
+			d1 = 0.0 ;
+			d2 = 0.5*dx[ i ] ;
+			E_w[ i ] = -( phi[ i ] - left_voltage )/( d1+d2 ) ;
+			//
+			E_c[ i ] = 0.5*( E_w[ i ] + E_e[ i ] ) ;
+
+		}else if( i == nCell-1 ) {
+			//
+			d1 = 0.5*dx[ i ] ;
+			d2 = 0.0 ;
+			E_e[ i ] = -( right_voltage - phi[ i ] )/( d1+d2 ) ;
+			//
+			d1 = 0.5*dx[i-1] ;
+			d2 = 0.5*dx[ i ] ;
+			E_w[ i ] = -( phi[ i ] - phi[i-1] )/( d1+d2 ) ;
+			//
+			E_c[ i ] = 0.5*( E_w[ i ] + E_e[ i ] ) ;
+
+		} else {
+			//
+			d1 = 0.5*dx[ i ] ;
+			d2 = 0.5*dx[i+1] ;
+			E_e[ i ] = -( phi[i+1] - phi[ i ] )/( d1+d2 ) ;
+			//
+			d1 = 0.5*dx[i-1] ;
+			d2 = 0.5*dx[ i ] ;
+			E_w[ i ] = -( phi[ i ] - phi[i-1] )/( d1+d2 ) ;
+			//
+			E_c[ i ] = 0.5*( E_w[ i ] + E_e[ i ] ) ;
+		}
+	}
+
+	DMDAVecRestoreArray( da, potential, &phi ) ;
+	DMDAVecRestoreArray( da,      gVec, &E_c ) ;
+	DMDAVecRestoreArray( da, gField[0], &E_e ) ;
+	DMDAVecRestoreArray( da, gField[1], &E_w ) ;
+	/* Update ghost cell value */
+	DMGlobalToLocal( da, gVec, INSERT_VALUES, Ex ) ;
+	DMGlobalToLocal( da, gField[0], INSERT_VALUES, Ee ) ;
+	DMGlobalToLocal( da, gField[1], INSERT_VALUES, Ew ) ;
 }
 void convection_diffusion_eqn()
 {
@@ -533,16 +591,17 @@ void output(string filename)
 	FILE *file_pointer ;
 	Vec vout ;
 	VecScatter ctx ;
-  VecScatterCreateToZero( poisson.x, &ctx, &vout ) ;
-	//here use c language.
+	/* create the vector on processor_0 and ready for scatter data on it. */
+  VecScatterCreateToZero( potential, &ctx, &vout ) ;
 
-	//Create a new file and write the title and xc points.
-	if ( mpi_rank==0 )
-	{
+	if ( mpi_rank==0 ) {
+
+/*--- Create a new file and write the title and xc points. ---*/
   	file_pointer = fopen( filename.c_str(),"w" );
-  	fprintf( file_pointer,"VARIABLES=\"X [m]\", \"potential\", \"n<sub>e</sub>\" \n"  ) ;
+  	fprintf( file_pointer,"VARIABLES=\"X [m]\", \"potential\", \"Ex [V/m]\", \"n<sub>e</sub>\" \n"  ) ;
 		fprintf( file_pointer,"ZONE I=%d, DATAPACKING=BLOCK\n", nCell) ;
 
+/*--- cell center location ---*/
 		for( PetscInt i = 0 ; i < nCell ; i++ ) {
 	 		fprintf( file_pointer,"%15.6e \t", xc[i]) ;
 			count++ ;
@@ -554,9 +613,9 @@ void output(string filename)
 		fprintf( file_pointer,"\n" ) ;
 	}
 
-	//Potential
-  VecScatterBegin( ctx, poisson.x, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
-  VecScatterEnd  ( ctx, poisson.x, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
+/*--- Potential ---*/
+  VecScatterBegin( ctx, potential, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
+  VecScatterEnd  ( ctx, potential, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
   if ( mpi_rank==0 ) {
 
@@ -572,7 +631,25 @@ void output(string filename)
   }
   VecRestoreArray( vout, &value ) ;
 
-	//electron nunber density.
+/*--- electric field ---*/
+  VecScatterBegin( ctx, Ex, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
+  VecScatterEnd  ( ctx, Ex, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
+  VecGetArray( vout, &value ) ;
+  if ( mpi_rank==0 ) {
+
+		for( PetscInt i = 0 ; i < nCell ; i++ ) {
+			fprintf( file_pointer,"%15.6e \t", value[i]) ;
+			count++ ;
+			if( count == 6 ) {
+				fprintf( file_pointer,"\n" ) ;
+				count=0 ;
+			}
+		}
+		fprintf( file_pointer,"\n" ) ;
+  }
+  VecRestoreArray( vout, &value ) ;
+
+/*--- electron nunber density. ---*/
   VecScatterBegin( ctx, ele.U0, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, ele.U0, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
