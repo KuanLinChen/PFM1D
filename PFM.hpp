@@ -65,7 +65,10 @@ void CreateMesh_1D();
 void InitializeLinearSystemSolver();
 void InitializePetscVector();
 void Poisson_eqn( PetscScalar, PetscScalar ) ;
+
 void electron_continuity_eqn();
+void ion_continuity_eqn();
+
 void convection_diffusion_eqn();
 void output(string);
 PetscScalar f1( PetscScalar ) ;
@@ -647,6 +650,137 @@ void electron_continuity_eqn()
 
 	KSPSolve( electron_continuity.ksp, electron_continuity.B, electron_continuity.x );
 	DMGlobalToLocal( da, electron_continuity.x, INSERT_VALUES, ele.U0 ) ;
+}
+void ion_continuity_eqn()
+{
+	PetscScalar sign_q = ion.sign_q ;
+	MatStencil  row, col[3] ;
+	PetscScalar v[3], *s,  *E_e, *E_w, *D, *Mu, *solution_old, *T ;
+	PetscScalar d1, d2, D_face, Mu_face, X, ThermalVel ;
+	//
+	MatZeroEntries( ion_continuity.A ) ;
+	//
+	DMDAVecGetArray( da, ion_continuity.B, &s ) ;
+	DMDAVecGetArray( da, ion_continuity.x, &solution_old ) ;
+	DMDAVecGetArray( da, ion.T, &T ) ;
+
+	//
+	DMDAVecGetArray( da, Ee, &E_e ) ;
+	DMDAVecGetArray( da, Ew, &E_w ) ;
+	//
+	DMDAVecGetArray( da, ion.Mu, &Mu ) ;
+	DMDAVecGetArray( da, ion.D ,  &D ) ;
+
+
+	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
+		row.i = i ;
+		 v[0] = 0.0 ;
+		 v[1] = 0.0 ;
+		 v[2] = 0.0 ;
+		 s[i] = 0.0 ;
+		if ( i==0 ) {
+
+			col[0].i = i  ;
+			col[1].i = i+1;
+
+			/*--- Unsteady ---*/
+			v [0] += 1.0/DTime*dx[i] ; 
+			s[ i ]+= solution_old[i]/DTime*dx[i] ;
+
+			/*--- e-face ---*/
+			d1 = 0.5*dx[ i ] ; 
+			d2 = 0.5*dx[i+1] ;
+			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[ i ] + d1*d1/( d1*d1 + d2*d2 )* Mu[i+1] ; 
+			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[ i ] + d1*d1/( d1*d1 + d2*d2 )*  D[i+1] ; 
+			X = sign_q*E_e[i]*Mu_face*(d1+d2)/D_face ;
+			//i
+			v[0] += -D_face/(d1+d2)*(-f2(X) ) ;
+			//i+1
+			v[1] += -D_face/(d1+d2)*( f1(X) ) ;
+
+			/*--- w-face ---*/
+			ThermalVel = sqrt( 8.0*Qe*T[i]/PI/ion.mass ) ;
+			v[0] += 0.25*ThermalVel ;
+
+			MatSetValuesStencil( ion_continuity.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
+
+		}else if( i == nCell-1 ) {
+
+			col[0].i = i-1;
+			col[1].i = i  ;
+
+			/*--- Unsteady ---*/
+			v [1] += 1.0/DTime*dx[i] ; 
+			s[ i ]+= solution_old[i]/DTime*dx[i] ;
+
+			/*--- e-face ---*/
+			ThermalVel = sqrt( 8.0*Qe*T[i]/PI/ion.mass ) ;
+			v[1] += 0.25*ThermalVel ;
+
+			/*--- w-face ---*/
+			d1 = 0.5*dx[i-1] ; d2 = 0.5*dx[ i ] ;
+			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[i-1] + d1*d1/( d1*d1 + d2*d2 )* Mu[ i ] ; 
+			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[i-1] + d1*d1/( d1*d1 + d2*d2 )*  D[ i ] ; 
+			X = sign_q*E_w[i]*Mu_face*(d1+d2)/D_face ;
+			//i-1
+			v[0] += -D_face/(d1+d2)*( f2( X) ) ;
+			//i
+			v[1] += -D_face/(d1+d2)*(-f1(-X) ) ;
+
+			MatSetValuesStencil( ion_continuity.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
+
+		} else {
+
+			col[0].i = i-1 ;
+			col[1].i = i   ;
+			col[2].i = i+1 ;
+			/*--- Unsteady ---*/
+			v [1] += 1.0/DTime*dx[i] ; 
+			s[ i ]+= solution_old[i]/DTime*dx[i] ;
+
+			/*--- e-face ---*/
+			d1 = 0.5*dx[ i ] ; 
+			d2 = 0.5*dx[i+1] ;
+			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[ i ] + d1*d1/( d1*d1 + d2*d2 )* Mu[i+1] ; 
+			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[ i ] + d1*d1/( d1*d1 + d2*d2 )*  D[i+1] ; 
+			X = sign_q*E_e[i]*Mu_face*(d1+d2)/D_face ;
+			//i
+			v[1] += -D_face/(d1+d2)*(-f2(X) ) ;
+			//i+1
+			v[2] += -D_face/(d1+d2)*( f1(X) ) ;
+
+
+			/*--- w-face ---*/
+			d1 = 0.5*dx[i-1] ; 
+			d2 = 0.5*dx[ i ] ;
+			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[i-1] + d1*d1/( d1*d1 + d2*d2 )* Mu[ i ] ; 
+			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[i-1] + d1*d1/( d1*d1 + d2*d2 )*  D[ i ] ; 
+			X = sign_q*E_w[i]*Mu_face*(d1+d2)/D_face ;
+			//i-1
+			v[0] += -D_face/(d1+d2)*( f2(X) ) ;
+			//i
+			v[1] += -D_face/(d1+d2)*(-f1(X) ) ;
+			//cout<<"1: "<<v[0]<<" "<<v[1]<<" "<<v[2]<<endl;
+			MatSetValuesStencil( ion_continuity.A, 1, &row, 3, col, v, INSERT_VALUES ) ;
+
+		}
+	}
+
+	DMDAVecRestoreArray( da, ion_continuity.B, &s ) ;
+	DMDAVecRestoreArray( da, ion_continuity.x, &solution_old ) ;
+	DMDAVecRestoreArray( da, ion.T, &T ) ;
+
+	DMDAVecRestoreArray( da, ion.Mu, &Mu ) ;
+	DMDAVecRestoreArray( da, ion.D ,  &D ) ;
+
+	DMDAVecRestoreArray( da, Ee, &E_e ) ;
+	DMDAVecRestoreArray( da, Ew, &E_w ) ;
+
+	MatAssemblyBegin(ion_continuity.A, MAT_FINAL_ASSEMBLY);
+	MatAssemblyEnd(ion_continuity.A, MAT_FINAL_ASSEMBLY);
+
+	KSPSolve( ion_continuity.ksp, ion_continuity.B, ion_continuity.x );
+	DMGlobalToLocal( da, ion_continuity.x, INSERT_VALUES, ion.U0 ) ;
 }
 void output(string filename)
 {
