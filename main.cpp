@@ -21,14 +21,27 @@ int main(int argc,char **args)
   InitialCondition() ;
   cout<<"InitialCondition"<<endl;
 
-  for ( int iCycle=0 ; iCycle <   1 ; iCycle++ ){
-    for (int iStep=0 ; iStep < 100 ; iStep++ ) {
+  PetscScalar Voltage=0.0, PhyicalTime=0.0 ;
 
-      Poisson_eqn( 0.0, 0.0 ) ;
+  for ( int iCycle=0 ; iCycle < nCycle ; iCycle++ ) {
+
+    for ( int iStep=0 ;  iStep <  nStep ;  iStep++ ) {
+
+      Voltage = Amplitude*sin(2.0*PI*Frequency*iStep*DTime) ;
+      //cout<<"iStep: "<<iStep<<", Voltage: "<<Voltage<<endl;
+      Poisson_eqn( Voltage, 0.0 ) ;
+
       ComputeElectricField( 0.0, 0.0 ) ;
+
       electron_continuity_eqn() ;
+
+      ion_continuity_eqn() ;
+
+      PhyicalTime += DTime ; 
+
+      output( "flow_"+to_string(iCycle)+"_"+to_string(iStep)+".dat" ) ;
     }//End step
-    output("flow-"+to_string(iCycle)+".dat" ) ;
+
   }//End cycle
 
 

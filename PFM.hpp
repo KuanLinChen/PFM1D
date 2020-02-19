@@ -15,47 +15,58 @@ typedef struct {
 	PetscScalar sign_q, mass ; //Species chearge.
 	Vec U0, //nunmber density.
 			U1, //flux in x-direction.
-			U2,  //energy flux.
-			T	;
+			U2, //energy flux.
+			T	; //Temperature
 
-	Vec  D, //Diffusion coefficient.
-			Mu, //Mobility 
+	Vec  D,  //Diffusion coefficient.
+			Mu,  //Mobility 
 			rate;//rate constant.
-} Species ; //Format of data output
+} Species ;
 
 /*--- Mesh & PETSc DMDA parameters ---*/
-PetscInt nCell = 100 ; //number of cells 
-PetscScalar Pressure_in_torr=1.0 ;
-PetscScalar DTime=1.0E-12 ;
+PetscInt nCell = 100     ;      // Number of cells.
+PetscInt nNode = nCell+1 ;      // Number of node. (calculated from nCell)
 PetscScalar mesh_factor = 5.0 ; //the grid point will close to the wall wnen value is large.
 
-PetscScalar *x, 	// node coordinate.
-						*xc,  // cell coordinate.
-						*dx ; //Cell width 
-PetscScalar gap_length = 0.02 ; //gap distance
+PetscScalar *x,         // Node coordinate.
+						*xc,        // Cell coordinate.
+						*dx ;       // Cell width 
 
-PetscInt nNode = nCell+1 ;/* number of node. (calculated from nCell)*/
+PetscInt overlope = 1 ; // Overlope cell in processor boundary.
 PetscInt dof = 1 ;
-PetscInt overlope = 1 ;
+
+/*--- Simulation & Physical parameters of the problem.  ---*/
+PetscScalar gap_length        =      0.02 ; //gap distance
+PetscScalar Pressure_in_torr  =       1.0 ; //Chamber pressure.
+PetscScalar Frequency         =  13.56E+6 ; //Applied frequency [Hz].
+PetscScalar Amplitude         =     200.0 ; //Applied voltage [V]. (half of peak-to-peak voltage).
+
+PetscInt nCycle = 1    ;  //Number of cycle you want to simulated.
+PetscInt nStep  = 200 ;  //Number of step within a cycle.
+
+PetscScalar DTime=(1.0/Frequency)/(nStep) ; //Time step size [s].
+
 
 
 /*--- Physical parameter ---*/
-PetscScalar Qe = 1.60217657E-19 ;
-PetscScalar Kb = 1.38064880E-23 ;
-PetscScalar epsilon0 = 8.854188e-12 ;
-PetscScalar Na = 6.02214129E23 ;
-PetscScalar PI = 4.0*atan(1.0) ;
+PetscScalar Qe       = 1.60217657E-19 ;
+PetscScalar Kb       = 1.38064880E-23 ;
+PetscScalar epsilon0 = 8.85418800E-12 ;
+PetscScalar Na       = 6.02214129E+23 ;
+PetscScalar PI       = 4.0*atan(1.0)  ;
+
 /*--- MPI & Petsc Distribution Memory ---*/
 DM da ;
 DMDALocalInfo da_info ;
 
-PetscMPIInt mpi_rank, 
+PetscMPIInt mpi_rank, /* Processor id. */
 						mpi_size; /* number of nodes */
 
 /* Declaration of Linear system Solver */
 LinearSysSolver poisson, electron_continuity, electron_energy, ion_continuity ;
 
-Vec potential, Mu_e, D_e, Mu_i, D_i, Ex, Ee, Ew, gVec, gField[2], N_e, N_i ;
+/* Declaration of solution variables */
+Vec potential, Ex, Ee, Ew, gVec, gField[2] ;
 Species ele, ion ;
 
 
@@ -175,17 +186,18 @@ void InitializePetscVector()
 	//Electron
 	ele.sign_q = -1.0 ;
 	ele.mass = 9.10938291E-31 ;
-	DMCreateLocalVector ( da, &ele.U0 ) ;//Mobility of electron at cell.
-	DMCreateLocalVector ( da, &ele. T ) ;//Mobility of electron at cell.
+	DMCreateLocalVector ( da, &ele.U0 ) ;//Number density of electron at cell.
+	DMCreateLocalVector ( da, &ele. T ) ;//temperature of electron at cell.
 	DMCreateLocalVector ( da, &ele.Mu ) ;//Mobility of electron at cell.
 	DMCreateLocalVector ( da, &ele.D  ) ;//Diffusion of electron at cell.
 
 	//Ion
 	ion.sign_q =  1.0 ;
 	ion.mass = (39.948)/Na/1000 ; //Argon AMU/Na/1000
-	DMCreateLocalVector ( da, &ion.U0 ) ;//Mobility of electron at cell.
-	DMCreateLocalVector ( da, &ion.Mu ) ;//Mobility of electron at cell.
-	DMCreateLocalVector ( da, &ion.D  ) ;//Diffusion of electron at cell.
+	DMCreateLocalVector ( da, &ion.U0 ) ;//Number density of ion at cell.
+	DMCreateLocalVector ( da, &ion. T ) ;//temperature of ion at cell.
+	DMCreateLocalVector ( da, &ion.Mu ) ;//Mobility of ion at cell.
+	DMCreateLocalVector ( da, &ion.D  ) ;//Diffusion of ion at cell.
 
 }
 void InitialCondition()
@@ -193,12 +205,11 @@ void InitialCondition()
 
 	VecSet( ele.U0,   (1.E+15)*Qe ) ; 
 	VecSet(electron_continuity.x, (1.E+15)*Qe  ) ;
-
-	VecSet( ele. T,   2.0 ) ;
-
+	VecSet( ele.T,   2.0 ) ;
 
 	VecSet( ion.U0,   (1.E+15)*Qe ) ; 
 	VecSet(ion_continuity.x, (1.E+15)*Qe  ) ;// I want to reuse the global in linear solver, so I keep it in old solution.
+	VecSet( ion.T,  0.026 ) ;
 }
 void UpdateTransportCoefficients()
 {
@@ -370,7 +381,7 @@ void convection_diffusion_eqn()
 
 	PetscScalar v[3], *s,  *E_e, *E_w, *D, *Mu ;
 
-	PetscScalar d1, d2, v1, v2, D_face, Mu_face, X ;
+	PetscScalar d1, d2, D_face, Mu_face, X ;
 	MatZeroEntries(electron_continuity.A);
 
 	DMDAVecGetArray( da, electron_continuity.B, &s ) ;
@@ -663,7 +674,6 @@ void ion_continuity_eqn()
 	DMDAVecGetArray( da, ion_continuity.B, &s ) ;
 	DMDAVecGetArray( da, ion_continuity.x, &solution_old ) ;
 	DMDAVecGetArray( da, ion.T, &T ) ;
-
 	//
 	DMDAVecGetArray( da, Ee, &E_e ) ;
 	DMDAVecGetArray( da, Ew, &E_w ) ;
@@ -674,10 +684,9 @@ void ion_continuity_eqn()
 
 	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
 		row.i = i ;
-		 v[0] = 0.0 ;
-		 v[1] = 0.0 ;
-		 v[2] = 0.0 ;
-		 s[i] = 0.0 ;
+		for ( PetscInt k=0 ; k < 3 ; k++ ) v[k] = 0.0 ;
+		s[i] = 0.0 ;
+
 		if ( i==0 ) {
 
 			col[0].i = i  ;
@@ -762,7 +771,6 @@ void ion_continuity_eqn()
 			v[1] += -D_face/(d1+d2)*(-f1(X) ) ;
 			//cout<<"1: "<<v[0]<<" "<<v[1]<<" "<<v[2]<<endl;
 			MatSetValuesStencil( ion_continuity.A, 1, &row, 3, col, v, INSERT_VALUES ) ;
-
 		}
 	}
 
@@ -798,7 +806,7 @@ void output(string filename)
   	file_pointer = fopen( filename.c_str(),"w" );
   	fprintf( file_pointer,"VARIABLES=\"X [m]\", \"potential\", \"Ex [V/m]\", \"n<sub>e</sub>\", \"n<sub>i</sub>\" \n"  ) ;
 		fprintf( file_pointer,"ZONE I=%d, DATAPACKING=BLOCK\n", nCell) ;
-
+		//fprintf( file_pointer,"T =\"ZONE\"\n") ;
 /*--- cell center location ---*/
 		for( PetscInt i = 0 ; i < nCell ; i++ ) {
 	 		fprintf( file_pointer,"%15.6e \t", xc[i]) ;
