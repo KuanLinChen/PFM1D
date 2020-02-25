@@ -39,13 +39,14 @@ PetscInt dof = 1 ;
 PetscScalar gap_length        =      0.02 ; //gap distance
 PetscScalar Pressure_in_torr  =       1.0 ; //Chamber pressure.
 PetscScalar Frequency         =  13.56E+6 ; //Applied frequency [Hz].
-PetscScalar Amplitude         =     200.0 ; //Applied voltage [V]. (half of peak-to-peak voltage).
+PetscScalar Amplitude         =     80.0  ; //Applied voltage [V]. (half of peak-to-peak voltage).
+PetscScalar T_background      =     293.0 ;
+PetscScalar N_background      = Pressure_in_torr*133.32/1.38064880E-23/T_background ;
 
-PetscInt nCycle = 1    ;  //Number of cycle you want to simulated.
-PetscInt nStep  = 200 ;  //Number of step within a cycle.
+PetscInt nCycle = 10    ;  //Number of cycle you want to simulated.
+PetscInt nStep  = 1000 ;  //Number of step within a cycle.
 
 PetscScalar DTime=(1.0/Frequency)/(nStep) ; //Time step size [s].
-
 
 
 /*--- Physical parameter ---*/
@@ -54,6 +55,27 @@ PetscScalar Kb       = 1.38064880E-23 ;
 PetscScalar epsilon0 = 8.85418800E-12 ;
 PetscScalar Na       = 6.02214129E+23 ;
 PetscScalar PI       = 4.0*atan(1.0)  ;
+
+/*--- non-dimensional parameters ---*/
+PetscScalar Mu_ref  = 1.0 ;  
+PetscScalar L_ref   = 1.0 ;//gap_length ;
+PetscScalar Phi_ref = 1.0 ;//Amplitude  ; 
+PetscScalar Qe_ref  = 1.0 ;//Qe  ; 
+PetscScalar epslion_ref = 1.0 ;//epsilon0
+//
+PetscScalar  n_ref   = epslion_ref*Phi_ref/Qe_ref/L_ref/L_ref ; // reference number density
+PetscScalar  D_ref   = Mu_ref*Phi_ref ; // reference diffusion
+PetscScalar en_ref   = Qe_ref*Phi_ref*n_ref ; // reference energy density
+PetscScalar Time_ref = L_ref*L_ref/D_ref ; //reference time   
+PetscScalar  T_ref   = en_ref*n_ref ; // reference temperature
+PetscScalar  k_ref   = 1.0/n_ref/Time_ref ; // reference rate constant.
+PetscScalar  f_ref   = 1.0/Time_ref ; // reference time.
+PetscScalar  E_ref   = Phi_ref/L_ref ; //reference electric field.  
+
+//for simulation.
+PetscScalar dt = DTime/Time_ref ;
+PetscScalar V  = Amplitude/Phi_ref ;
+PetscScalar f  = Frequency/f_ref ;
 
 /*--- MPI & Petsc Distribution Memory ---*/
 DM da ;
@@ -66,7 +88,7 @@ PetscMPIInt mpi_rank, /* Processor id. */
 LinearSysSolver poisson, electron_continuity, electron_energy, ion_continuity ;
 
 /* Declaration of solution variables */
-Vec potential, Ex, Ee, Ew, gVec, gField[2] ;
+Vec potential, Ex, Ee, Ew, gVec, gField[2], Rdot, InelasticLoss ;
 Species ele, ion ;
 
 
@@ -76,7 +98,7 @@ void CreateMesh_1D();
 void InitializeLinearSystemSolver();
 void InitializePetscVector();
 void Poisson_eqn( PetscScalar, PetscScalar ) ;
-
+void UpdateSourceTerm();
 void electron_continuity_eqn();
 void ion_continuity_eqn();
 
@@ -119,6 +141,10 @@ void CreateMesh_1D()
 		x[ i ] = 0.5*gap_length*( 1.0 + tanh( mesh_factor*( (PetscScalar)i/nCell-0.5 ) ) /tanh(0.5*mesh_factor) ) ;
 		//PetscPrintf(PETSC_COMM_SELF, " %15.6e \t  3 \n", x[i] ) ;
 	}
+	//normalized 
+	for ( PetscInt i = 0 ; i < nNode ; i++ ) {
+		x[ i ] = x[ i ]/ L_ref ;
+	} 
 
 	/* cell center. */
 	for( PetscInt i= 0 ; i < nCell ; i++ ) {
@@ -177,6 +203,10 @@ void InitializePetscVector()
 	DMCreateGlobalVector( da, &gField[0] ) ;
 	DMCreateGlobalVector( da, &gField[1] ) ;
 
+
+	DMCreateGlobalVector( da, &Rdot ) ;
+	DMCreateGlobalVector( da, &InelasticLoss ) ;
+
 	//electrostatic 
 	DMCreateLocalVector ( da, &potential ) ;//cell center potential.
 	DMCreateLocalVector  ( da,  &Ex ) ;//cell center electric field.
@@ -202,25 +232,84 @@ void InitializePetscVector()
 }
 void InitialCondition()
 {
+	PetscScalar N0 = 1.0E+15, Te0 = 6.0 ;
+	VecSet(               ele.U0, N0/n_ref ) ; 
+	VecSet(electron_continuity.x, N0/n_ref  ) ;
+	VecSet( ele.T,   Te0/T_ref ) ;
 
-	VecSet( ele.U0,   (1.E+15)*Qe ) ; 
-	VecSet(electron_continuity.x, (1.E+15)*Qe  ) ;
-	VecSet( ele.T,   2.0 ) ;
+	VecSet(          ion.U0, N0/n_ref ) ; 
+	VecSet(ion_continuity.x, N0/n_ref  ) ;// I want to reuse the global in linear solver, so I keep it in old solution.
+	VecSet( ion.T,  0.026/T_ref ) ;
 
-	VecSet( ion.U0,   (1.E+15)*Qe ) ; 
-	VecSet(ion_continuity.x, (1.E+15)*Qe  ) ;// I want to reuse the global in linear solver, so I keep it in old solution.
-	VecSet( ion.T,  0.026 ) ;
+	/* Print simulation conditions */
+	PetscPrintf(PETSC_COMM_SELF, " /*----------Simulation Conditions ----------*/ \n" ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Background pressuer         : %15.6e Torr\n", Pressure_in_torr  ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Background temperature      : %15.6e Torr\n", T_background      ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Background number density   : %15.6e m^-3\n", N_background      ) ;
+	//
+	PetscPrintf(PETSC_COMM_SELF, "Gap distance                : %15.6e   m \n", gap_length ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Applied frequency           : %15.6e MHz \n", Frequency  ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Applied voltage (Amplitude) : %15.6e V   \n", Amplitude  ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Time step size              : %15.6e Sec.\n", DTime  ) ;
+
+	PetscPrintf(PETSC_COMM_SELF, "\n /*----------Non-dimensional parameters ----------*/ \n" ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference Mobility          : %15.6e \n",  Mu_ref ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference Diffusion         : %15.6e \n",   D_ref ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference Length            : %15.6e \n",   L_ref ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference Potential         : %15.6e \n", Phi_ref ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference Qe                : %15.6e \n",  Qe_ref ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference density           : %15.6e \n",   n_ref ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference energy density    : %15.6e \n",  en_ref ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference time              : %15.6e \n",Time_ref ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference rate constant     : %15.6e \n",   k_ref ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference frequency         : %15.6e \n",   f_ref ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference temperature       : %15.6e \n",   T_ref ) ;
+	PetscPrintf(PETSC_COMM_SELF, "Reference electric field    : %15.6e \n",   E_ref ) ;
+//PetscEnd();
 }
 void UpdateTransportCoefficients()
 {
 	//Davoudabadi, M., Shrimpton, J., and Mashayek, F., “On accuracy and performance of high-order finite volume methods in local 
 	//          mean energy model of non-thermal plasmas,” Journal of Computational Physics, vol. 228, no. 7, pp. 2468-2479, 2009.
-	VecSet( ele.Mu,   30.0/Pressure_in_torr) ;
-	VecSet( ele.D ,  120.0/Pressure_in_torr) ;
+	VecSet( ele.Mu,   30.0/Pressure_in_torr/Mu_ref ) ;
+	VecSet( ele.D ,  120.0/Pressure_in_torr/ D_ref ) ;
 
-	VecSet( ion.Mu,   0.14/Pressure_in_torr) ;
-	VecSet( ion.D , 4.0E-3/Pressure_in_torr) ;
+	VecSet( ion.Mu,   0.14/Pressure_in_torr/Mu_ref ) ;
+	VecSet( ion.D , 4.0E-3/Pressure_in_torr/ D_ref ) ;
 
+}
+void UpdateSourceTerm()
+{
+	//Davoudabadi, M., Shrimpton, J., and Mashayek, F., “On accuracy and performance of high-order finite volume methods in local 
+	//          mean energy model of non-thermal plasmas,” Journal of Computational Physics, vol. 228, no. 7, pp. 2468-2479, 2009.
+	PetscScalar *Ne, *R_dot, *Te, *inelastic_loss ;
+	PetscScalar ionization_energy = 15.578*Qe ; //[J]
+	PetscScalar Te_unit=0.0, RateConstant=0.0 ;
+
+	DMDAVecGetArray( da, ele.U0, &Ne ) ;
+	DMDAVecGetArray( da, ele.T , &Te ) ;
+	DMDAVecGetArray( da, Rdot, &R_dot ) ;
+	DMDAVecGetArray( da, InelasticLoss, &inelastic_loss ) ;
+
+	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
+
+		Te_unit = Te[i]*T_ref ;
+		//Ne_unit = Ne[i]*n_ref ;
+
+		if( Te_unit > 5.3 ) {
+			RateConstant = (8.7E-15)*(Te_unit-5.3)*exp(-4.9/sqrt(Te_unit-5.3) )/k_ref ;
+		} else {
+			RateConstant = 0.0 ;
+		}
+
+		R_dot[i] = RateConstant*Ne[i]*(N_background/n_ref);
+
+		inelastic_loss[i] = R_dot[i]*ionization_energy/T_ref ;
+	}
+	DMDAVecRestoreArray( da, ele.U0, &Ne ) ;
+	DMDAVecRestoreArray( da, ele.T , &Te ) ;
+	DMDAVecRestoreArray( da, Rdot, &R_dot ) ;
+	DMDAVecRestoreArray( da, InelasticLoss, &inelastic_loss ) ;
 }
 void Poisson_eqn( PetscScalar left_voltage, PetscScalar right_voltage )
 {
@@ -295,7 +384,9 @@ void Poisson_eqn( PetscScalar left_voltage, PetscScalar right_voltage )
 			MatSetValuesStencil( poisson.A, 1, &row, 3, col, v, INSERT_VALUES ) ;
 		}
 
-		source[ i ] += -( Ni[i]-Ne[i] ) ;
+		source[ i ] += -Qe*( Ni[i]-Ne[i] )/epsilon0*dx[i] ;
+		//source[ i ] /= epsilon0 ;
+
 	}
 
 	DMDAVecRestoreArray( da, poisson.B, &source ) ;
@@ -535,7 +626,7 @@ void electron_continuity_eqn()
 {
 	PetscScalar sign_q = ele.sign_q ;
 	MatStencil  row, col[3] ;
-	PetscScalar v[3], *s,  *E_e, *E_w, *D, *Mu, *solution_old, *T ;
+	PetscScalar v[3], *s,  *E_e, *E_w, *D, *Mu, *solution_old, *T, *R_dot ;
 	PetscScalar d1, d2, D_face, Mu_face, X, ThermalVel ;
 	//
 	MatZeroEntries( electron_continuity.A ) ;
@@ -550,7 +641,8 @@ void electron_continuity_eqn()
 	//
 	DMDAVecGetArray( da, ele.Mu, &Mu ) ;
 	DMDAVecGetArray( da, ele.D ,  &D ) ;
-
+	//
+	DMDAVecGetArray( da, Rdot, &R_dot ) ;
 
 	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
 		row.i = i ;
@@ -564,8 +656,10 @@ void electron_continuity_eqn()
 			col[1].i = i+1;
 
 			/*--- Unsteady ---*/
-			v [0] += 1.0/DTime*dx[i] ; 
-			s[ i ]+= solution_old[i]/DTime*dx[i] ;
+			v [0] += 1.0/dt*dx[i] ; 
+			s[ i ]+= solution_old[i]/dt*dx[i] ;
+			/* Chemical */
+			s[ i ]+= R_dot[i]*dx[i] ;
 
 			/*--- e-face ---*/
 			d1 = 0.5*dx[ i ] ; 
@@ -590,8 +684,8 @@ void electron_continuity_eqn()
 			col[1].i = i  ;
 
 			/*--- Unsteady ---*/
-			v [1] += 1.0/DTime*dx[i] ; 
-			s[ i ]+= solution_old[i]/DTime*dx[i] ;
+			v [1] += 1.0/dt*dx[i] ; 
+			s[ i ]+= solution_old[i]/dt*dx[i] ;
 
 			/*--- e-face ---*/
 			ThermalVel = sqrt( 8.0*Qe*T[i]/PI/ele.mass ) ;
@@ -615,8 +709,8 @@ void electron_continuity_eqn()
 			col[1].i = i   ;
 			col[2].i = i+1 ;
 			/*--- Unsteady ---*/
-			v [1] += 1.0/DTime*dx[i] ; 
-			s[ i ]+= solution_old[i]/DTime*dx[i] ;
+			v [1] += 1.0/dt*dx[i] ; 
+			s[ i ]+= solution_old[i]/dt*dx[i] ;
 
 			/*--- e-face ---*/
 			d1 = 0.5*dx[ i ] ; 
@@ -666,7 +760,7 @@ void ion_continuity_eqn()
 {
 	PetscScalar sign_q = ion.sign_q ;
 	MatStencil  row, col[3] ;
-	PetscScalar v[3], *s,  *E_e, *E_w, *D, *Mu, *solution_old, *T ;
+	PetscScalar v[3], *s,  *E_e, *E_w, *D, *Mu, *solution_old, *T, *R_dot ;
 	PetscScalar d1, d2, D_face, Mu_face, X, ThermalVel ;
 	//
 	MatZeroEntries( ion_continuity.A ) ;
@@ -680,6 +774,8 @@ void ion_continuity_eqn()
 	//
 	DMDAVecGetArray( da, ion.Mu, &Mu ) ;
 	DMDAVecGetArray( da, ion.D ,  &D ) ;
+	//
+	DMDAVecGetArray( da, Rdot ,  &R_dot ) ;
 
 
 	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
@@ -693,8 +789,10 @@ void ion_continuity_eqn()
 			col[1].i = i+1;
 
 			/*--- Unsteady ---*/
-			v [0] += 1.0/DTime*dx[i] ; 
-			s[ i ]+= solution_old[i]/DTime*dx[i] ;
+			v [0] += 1.0/dt*dx[i] ; 
+			s[ i ]+= solution_old[i]/dt*dx[i] ;
+			/* Chemical */
+			s[ i ]+= R_dot[i]*dx[i] ;
 
 			/*--- e-face ---*/
 			d1 = 0.5*dx[ i ] ; 
@@ -719,8 +817,8 @@ void ion_continuity_eqn()
 			col[1].i = i  ;
 
 			/*--- Unsteady ---*/
-			v [1] += 1.0/DTime*dx[i] ; 
-			s[ i ]+= solution_old[i]/DTime*dx[i] ;
+			v [1] += 1.0/dt*dx[i] ; 
+			s[ i ]+= solution_old[i]/dt*dx[i] ;
 
 			/*--- e-face ---*/
 			ThermalVel = sqrt( 8.0*Qe*T[i]/PI/ion.mass ) ;
@@ -744,8 +842,8 @@ void ion_continuity_eqn()
 			col[1].i = i   ;
 			col[2].i = i+1 ;
 			/*--- Unsteady ---*/
-			v [1] += 1.0/DTime*dx[i] ; 
-			s[ i ]+= solution_old[i]/DTime*dx[i] ;
+			v [1] += 1.0/dt*dx[i] ; 
+			s[ i ]+= solution_old[i]/dt*dx[i] ;
 
 			/*--- e-face ---*/
 			d1 = 0.5*dx[ i ] ; 
@@ -784,6 +882,8 @@ void ion_continuity_eqn()
 	DMDAVecRestoreArray( da, Ee, &E_e ) ;
 	DMDAVecRestoreArray( da, Ew, &E_w ) ;
 
+	DMDAVecRestoreArray( da, Rdot ,  &R_dot ) ;
+
 	MatAssemblyBegin(ion_continuity.A, MAT_FINAL_ASSEMBLY);
 	MatAssemblyEnd(ion_continuity.A, MAT_FINAL_ASSEMBLY);
 
@@ -804,12 +904,12 @@ void output(string filename)
 
 /*--- Create a new file and write the title and xc points. ---*/
   	file_pointer = fopen( filename.c_str(),"w" );
-  	fprintf( file_pointer,"VARIABLES=\"X [m]\", \"potential\", \"Ex [V/m]\", \"n<sub>e</sub>\", \"n<sub>i</sub>\" \n"  ) ;
+  	fprintf( file_pointer,"VARIABLES=\"X [m]\", \"potential\", \"Ex [V/m]\", \"n<sub>e</sub>\", \"n<sub>i</sub>\", \"Rdot\" \n"  ) ;
 		fprintf( file_pointer,"ZONE I=%d, DATAPACKING=BLOCK\n", nCell) ;
 		//fprintf( file_pointer,"T =\"ZONE\"\n") ;
 /*--- cell center location ---*/
 		for( PetscInt i = 0 ; i < nCell ; i++ ) {
-	 		fprintf( file_pointer,"%15.6e \t", xc[i]) ;
+	 		fprintf( file_pointer,"%15.6e \t", xc[i]*L_ref ) ;
 			count++ ;
 			if( count == 6 ) {
 				fprintf( file_pointer,"\n" ) ;
@@ -826,7 +926,7 @@ void output(string filename)
   if ( mpi_rank==0 ) {
 
 		for( PetscInt i = 0 ; i < nCell ; i++ ) {
-			fprintf( file_pointer,"%15.6e \t", value[i]) ;
+			fprintf( file_pointer,"%15.6e \t", value[i]*Phi_ref ) ;
 			count++ ;
 			if( count == 6 ) {
 				fprintf( file_pointer,"\n" ) ;
@@ -844,7 +944,7 @@ void output(string filename)
   if ( mpi_rank==0 ) {
 
 		for( PetscInt i = 0 ; i < nCell ; i++ ) {
-			fprintf( file_pointer,"%15.6e \t", value[i]) ;
+			fprintf( file_pointer,"%15.6e \t", value[i]*E_ref ) ;
 			count++ ;
 			if( count == 6 ) {
 				fprintf( file_pointer,"\n" ) ;
@@ -862,7 +962,7 @@ void output(string filename)
   if ( mpi_rank==0 ) {
 
 		for( PetscInt i = 0 ; i < nCell ; i++ ) {
-			fprintf( file_pointer,"%15.6e \t", value[i]/Qe) ;
+			fprintf( file_pointer,"%15.6e \t", value[i]*n_ref) ;
 			count++ ;
 			if( count == 6 ) {
 				fprintf( file_pointer,"\n" ) ;
@@ -880,7 +980,7 @@ void output(string filename)
   if ( mpi_rank==0 ) {
 
 		for( PetscInt i = 0 ; i < nCell ; i++ ) {
-			fprintf( file_pointer,"%15.6e \t", value[i]/Qe) ;
+			fprintf( file_pointer,"%15.6e \t", value[i]*n_ref) ;
 			count++ ;
 			if( count == 6 ) {
 				fprintf( file_pointer,"\n" ) ;
@@ -891,6 +991,23 @@ void output(string filename)
   }
   VecRestoreArray( vout, &value ) ;
 
+/*--- source term ---*/
+  VecScatterBegin( ctx, Rdot, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
+  VecScatterEnd  ( ctx, Rdot, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
+  VecGetArray( vout, &value ) ;
+  if ( mpi_rank==0 ) {
+
+		for( PetscInt i = 0 ; i < nCell ; i++ ) {
+			fprintf( file_pointer,"%15.6e \t", value[i]*n_ref*n_ref*k_ref) ;
+			count++ ;
+			if( count == 6 ) {
+				fprintf( file_pointer,"\n" ) ;
+				count=0 ;
+			}
+		}
+		fprintf( file_pointer,"\n" ) ;
+  }
+  VecRestoreArray( vout, &value ) ;
 	if ( mpi_rank==0 )
   fclose (file_pointer);
   VecScatterDestroy(&ctx);
