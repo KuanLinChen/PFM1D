@@ -34,10 +34,10 @@ int main(int argc,char **args)
       
       Poisson_eqn( voltage, 0.0 ) ;
 
-      ComputeElectricField( 0.0, 0.0 ) ;
+      ComputeElectricField( voltage, 0.0 ) ;
 
       electron_continuity_eqn() ;
-
+      electron_flux() ;
       ion_continuity_eqn() ;
 
       PhyicalTime += DTime ; 
