@@ -29,15 +29,19 @@ int main(int argc,char **args)
     for ( int iStep=0 ;  iStep <  nStep ;  iStep++ ) {
 
       voltage = V*sin(2.0*PI*(f)*iStep*dt) ;
-      //cout<<"iStep: "<<iStep<<", voltage: "<<voltage*Phi_ref<<endl;
+
       UpdateSourceTerm() ;
-      
+      //
       Poisson_eqn( voltage, 0.0 ) ;
-
+      //
       ComputeElectricField( voltage, 0.0 ) ;
-
+      //
       electron_continuity_eqn() ;
       electron_flux() ;
+      electron_energy_density_eqn();
+      //PetscEnd();
+      Compute_Te();
+      //
       ion_continuity_eqn() ;
 
       PhyicalTime += DTime ; 

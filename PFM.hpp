@@ -102,7 +102,8 @@ void UpdateSourceTerm();
 void electron_continuity_eqn();
 void electron_flux();
 void ion_continuity_eqn();
-
+void Compute_Te();
+void electron_energy_density_eqn();
 void convection_diffusion_eqn();
 void output(string);
 PetscScalar f1( PetscScalar ) ;
@@ -219,6 +220,7 @@ void InitializePetscVector()
 	ele.mass = 9.10938291E-31 ;
 	DMCreateLocalVector ( da, &ele.U0 ) ;//Number density of electron at cell.
 	DMCreateLocalVector ( da, &ele.U1 ) ;//Number density of electron at cell.
+	DMCreateLocalVector ( da, &ele.U2 ) ;//Energy density of electron at cell.
 	DMCreateLocalVector ( da, &ele. T ) ;//temperature of electron at cell.
 	DMCreateLocalVector ( da, &ele.Mu ) ;//Mobility of electron at cell.
 	DMCreateLocalVector ( da, &ele.D  ) ;//Diffusion of electron at cell.
@@ -234,9 +236,13 @@ void InitializePetscVector()
 }
 void InitialCondition()
 {
-	PetscScalar N0 = 1.0E+15, Te0 = 6.0 ;
+	PetscScalar N0 = 1.0E+15, Te0 = 2.0 ;
 	VecSet(               ele.U0, N0/n_ref ) ; 
 	VecSet(electron_continuity.x, N0/n_ref  ) ;
+	//
+	VecSet( 					ele.U2, N0*Te0*Qe/en_ref ) ;
+	VecSet(electron_energy.x, N0*Te0*Qe/en_ref ) ;
+	//
 	VecSet( ele.T,   Te0/T_ref ) ;
 
 	VecSet(          ion.U0, N0/n_ref ) ; 
@@ -660,8 +666,6 @@ void electron_continuity_eqn()
 			/*--- Unsteady ---*/
 			v [0] += 1.0/dt*dx[i] ; 
 			s[ i ]+= solution_old[i]/dt*dx[i] ;
-			/* Chemical */
-			s[ i ]+= R_dot[i]*dx[i] ;
 
 			/*--- e-face ---*/
 			d1 = 0.5*dx[ i ] ; 
@@ -713,6 +717,7 @@ void electron_continuity_eqn()
 			v [1] += 1.0/dt*dx[i] ; 
 			s[ i ]+= solution_old[i]/dt*dx[i] ;
 
+
 			/*--- e-face ---*/
 			d1 = 0.5*dx[ i ] ; 
 			d2 = 0.5*dx[i+1] ;
@@ -737,8 +742,9 @@ void electron_continuity_eqn()
 			v[1] += -D_face/(d1+d2)*(-f1(X) ) ;
 			//cout<<"1: "<<v[0]<<" "<<v[1]<<" "<<v[2]<<endl;
 			MatSetValuesStencil( electron_continuity.A, 1, &row, 3, col, v, INSERT_VALUES ) ;
-
 		}
+		/* Chemical */
+		s[ i ]+= R_dot[i]*dx[i] ;
 	}
 
 	DMDAVecRestoreArray( da, electron_continuity.B, &s ) ;
@@ -750,6 +756,8 @@ void electron_continuity_eqn()
 
 	DMDAVecRestoreArray( da, Ee, &E_e ) ;
 	DMDAVecRestoreArray( da, Ew, &E_w ) ;
+	//
+	DMDAVecRestoreArray( da, Rdot, &R_dot ) ;
 
 	MatAssemblyBegin(electron_continuity.A, MAT_FINAL_ASSEMBLY);
 	MatAssemblyEnd(electron_continuity.A, MAT_FINAL_ASSEMBLY);
@@ -863,7 +871,7 @@ void ion_continuity_eqn()
 	PetscScalar sign_q = ion.sign_q ;
 	MatStencil  row, col[3] ;
 	PetscScalar v[3], *s,  *E_e, *E_w, *D, *Mu, *solution_old, *T, *R_dot ;
-	PetscScalar d1, d2, D_face, Mu_face, X, ThermalVel ;
+	PetscScalar d1, d2, D_face, Mu_face, X ;
 	//
 	MatZeroEntries( ion_continuity.A ) ;
 	//
@@ -895,8 +903,7 @@ void ion_continuity_eqn()
 			/*--- Unsteady ---*/
 			v [0] += 1.0/dt*dx[i] ; 
 			s[ i ]+= solution_old[i]/dt*dx[i] ;
-			/* Chemical */
-			s[ i ]+= R_dot[i]*dx[i] ;
+
 
 			/*--- e-face ---*/
 			d1 = 0.5*dx[ i ] ; 
@@ -924,6 +931,8 @@ void ion_continuity_eqn()
 			v [1] += 1.0/dt*dx[i] ; 
 			s[ i ]+= solution_old[i]/dt*dx[i] ;
 
+
+
 			/*--- e-face ---*/
 			v[1] += max( 0.0, sign_q*Mu[i]*E_e[i]*(1.0));
 
@@ -949,6 +958,8 @@ void ion_continuity_eqn()
 			v [1] += 1.0/dt*dx[i] ; 
 			s[ i ]+= solution_old[i]/dt*dx[i] ;
 
+
+
 			/*--- e-face ---*/
 			d1 = 0.5*dx[ i ] ; 
 			d2 = 0.5*dx[i+1] ;
@@ -973,18 +984,20 @@ void ion_continuity_eqn()
 			//cout<<"1: "<<v[0]<<" "<<v[1]<<" "<<v[2]<<endl;
 			MatSetValuesStencil( ion_continuity.A, 1, &row, 3, col, v, INSERT_VALUES ) ;
 		}
+		/* Chemical */
+		s[ i ]+= R_dot[i]*dx[i] ;
 	}
 
 	DMDAVecRestoreArray( da, ion_continuity.B, &s ) ;
 	DMDAVecRestoreArray( da, ion_continuity.x, &solution_old ) ;
 	DMDAVecRestoreArray( da, ion.T, &T ) ;
-
+	//
 	DMDAVecRestoreArray( da, ion.Mu, &Mu ) ;
 	DMDAVecRestoreArray( da, ion.D ,  &D ) ;
-
+	//
 	DMDAVecRestoreArray( da, Ee, &E_e ) ;
 	DMDAVecRestoreArray( da, Ew, &E_w ) ;
-
+	//
 	DMDAVecRestoreArray( da, Rdot ,  &R_dot ) ;
 
 	MatAssemblyBegin(ion_continuity.A, MAT_FINAL_ASSEMBLY);
@@ -992,6 +1005,168 @@ void ion_continuity_eqn()
 
 	KSPSolve( ion_continuity.ksp, ion_continuity.B, ion_continuity.x );
 	DMGlobalToLocal( da, ion_continuity.x, INSERT_VALUES, ion.U0 ) ;
+}
+void electron_energy_density_eqn()
+{
+	PetscScalar C53 = 5.0/3.0 ;
+	PetscScalar sign_q = ele.sign_q ;
+	MatStencil  row, col[3] ;
+	PetscScalar v[3], *s,  *E_e, *E_w, *D, *Mu, *solution_old, *T, *inelastic_loss, *E_x, *Flux ;
+	PetscScalar d1, d2, D_face, Mu_face, X ;
+	//
+	MatZeroEntries( electron_energy.A ) ;
+	//
+	DMDAVecGetArray( da, electron_energy.B, &s ) ;
+	DMDAVecGetArray( da, electron_energy.x, &solution_old ) ;
+	DMDAVecGetArray( da, ele.T, &T ) ;
+
+	DMDAVecGetArray( da, ele.U1, &Flux ) ;
+	DMDAVecGetArray( da, InelasticLoss, &inelastic_loss ) ;
+
+	//
+	DMDAVecGetArray( da, Ee, &E_e ) ;
+	DMDAVecGetArray( da, Ew, &E_w ) ;
+	DMDAVecGetArray( da, Ex, &E_x ) ;
+	//
+	DMDAVecGetArray( da, ele.Mu, &Mu ) ;
+	DMDAVecGetArray( da, ele.D ,  &D ) ;
+
+
+	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
+		row.i = i ;
+		 v[0] = 0.0 ;
+		 v[1] = 0.0 ;
+		 v[2] = 0.0 ;
+		 s[i] = 0.0 ;
+
+
+		if ( i==0 ) {
+
+			col[0].i = i  ;
+			col[1].i = i+1;
+
+			/*--- Unsteady ---*/
+			v [0] += 1.0/dt*dx[i] ; 
+			s[ i ]+= solution_old[i]/dt*dx[i] ;
+
+			/*--- e-face ---*/
+			d1 = 0.5*dx[ i ] ; 
+			d2 = 0.5*dx[i+1] ;
+			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[ i ] + d1*d1/( d1*d1 + d2*d2 )* Mu[i+1] ; 
+			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[ i ] + d1*d1/( d1*d1 + d2*d2 )*  D[i+1] ; 
+			X = sign_q*E_e[i]*Mu_face*(d1+d2)/D_face ;
+			//i
+			v[0] += -C53*D_face/(d1+d2)*(-f2(X) ) ;
+			//i+1
+			v[1] += -C53*D_face/(d1+d2)*( f1(X) ) ;
+
+			/*--- w-face ---*/
+			v[0] += -C53*D[i]/d1 ;
+
+			MatSetValuesStencil( electron_energy.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
+
+		}else if( i == nCell-1 ) {
+
+			col[0].i = i-1;
+			col[1].i = i  ;
+
+			/*--- Unsteady ---*/
+			v [1] += 1.0/dt*dx[i] ; 
+			s[ i ]+= solution_old[i]/dt*dx[i] ;
+
+			/*--- w-face ---*/
+			d1 = 0.5*dx[i-1] ; d2 = 0.5*dx[ i ] ;
+			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[i-1] + d1*d1/( d1*d1 + d2*d2 )* Mu[ i ] ; 
+			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[i-1] + d1*d1/( d1*d1 + d2*d2 )*  D[ i ] ; 
+			X = sign_q*E_w[i]*Mu_face*(d1+d2)/D_face ;
+			//i-1
+			v[0] += -C53*D_face/(d1+d2)*( f2( X) ) ;
+			//i
+			v[1] += -C53*D_face/(d1+d2)*(-f1(-X) ) ;
+
+			/*--- e-face ---*/
+			v[1] += C53*D[i]/d1 ;
+
+			MatSetValuesStencil( electron_energy.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
+
+		} else {
+
+			col[0].i = i-1 ;
+			col[1].i = i   ;
+			col[2].i = i+1 ;
+			/*--- Unsteady ---*/
+			v [1] += 1.0/dt*dx[i] ; 
+			s[ i ]+= solution_old[i]/dt*dx[i] ;
+
+			/*--- e-face ---*/
+			d1 = 0.5*dx[ i ] ; 
+			d2 = 0.5*dx[i+1] ;
+			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[ i ] + d1*d1/( d1*d1 + d2*d2 )* Mu[i+1] ; 
+			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[ i ] + d1*d1/( d1*d1 + d2*d2 )*  D[i+1] ; 
+			X = sign_q*E_e[i]*Mu_face*(d1+d2)/D_face ;
+			//i
+			v[1] += -C53*D_face/(d1+d2)*(-f2(X) ) ;
+			//i+1
+			v[2] += -C53*D_face/(d1+d2)*( f1(X) ) ;
+
+
+			/*--- w-face ---*/
+			d1 = 0.5*dx[i-1] ; 
+			d2 = 0.5*dx[ i ] ;
+			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[i-1] + d1*d1/( d1*d1 + d2*d2 )* Mu[ i ] ; 
+			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[i-1] + d1*d1/( d1*d1 + d2*d2 )*  D[ i ] ; 
+			X = sign_q*E_w[i]*Mu_face*(d1+d2)/D_face ;
+			//i-1
+			v[0] += -C53*D_face/(d1+d2)*( f2(X) ) ;
+			//i
+			v[1] += -C53*D_face/(d1+d2)*(-f1(X) ) ;
+			//cout<<"1: "<<v[0]<<" "<<v[1]<<" "<<v[2]<<endl;
+			MatSetValuesStencil( electron_energy.A, 1, &row, 3, col, v, INSERT_VALUES ) ;
+
+		}
+
+
+		/* Chemical */
+		s[ i ]+= -Qe*inelastic_loss[i]*dx[i] -Qe*E_x[i]*Flux[i]*dx[i] ;
+	}
+
+	DMDAVecRestoreArray( da, electron_energy.B, &s ) ;
+	DMDAVecRestoreArray( da, electron_energy.x, &solution_old ) ;
+	DMDAVecRestoreArray( da, ele.T, &T ) ;
+
+	//
+	DMDAVecRestoreArray( da, ele.U1, &Flux ) ;
+	DMDAVecRestoreArray( da, InelasticLoss, &inelastic_loss ) ;
+	//
+	DMDAVecRestoreArray( da, Ee, &E_e ) ;
+	DMDAVecRestoreArray( da, Ew, &E_w ) ;
+	DMDAVecRestoreArray( da, Ex, &E_x ) ;
+	//
+	DMDAVecRestoreArray( da, ele.Mu, &Mu ) ;
+	DMDAVecRestoreArray( da, ele.D ,  &D ) ;
+
+	MatAssemblyBegin(electron_energy.A, MAT_FINAL_ASSEMBLY);
+	MatAssemblyEnd(electron_energy.A, MAT_FINAL_ASSEMBLY);
+
+	KSPSolve( electron_energy.ksp, electron_energy.B, electron_energy.x );
+	DMGlobalToLocal( da, electron_energy.x, INSERT_VALUES, ele.U2 ) ;
+}
+void Compute_Te()
+{
+	PetscScalar *energy, *Ne, *T ;
+
+	DMDAVecGetArray( da, ele.T, &T ) ;
+	DMDAVecGetArray( da, ele.U0, &Ne ) ;
+	DMDAVecGetArray( da, ele.U2, &energy ) ;
+
+
+	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
+		T[ i ] = energy[i]/Ne[i]*2.0/3.0/Qe ;
+	}
+
+	DMDAVecRestoreArray( da, ele.T, &T ) ;
+	DMDAVecRestoreArray( da, ele.U0, &Ne ) ;
+	DMDAVecRestoreArray( da, ele.U2, &energy ) ;
 }
 void output(string filename)
 {
@@ -1002,12 +1177,12 @@ void output(string filename)
 	VecScatter ctx ;
 	/* create the vector on processor_0 and ready for scatter data on it. */
   VecScatterCreateToZero( potential, &ctx, &vout ) ;
-
 	if ( mpi_rank==0 ) {
 
 /*--- Create a new file and write the title and xc points. ---*/
   	file_pointer = fopen( filename.c_str(),"w" );
-  	fprintf( file_pointer,"VARIABLES=\"X [m]\", \"potential\", \"Ex [V/m]\", \"n<sub>e</sub>\", \"n<sub>i</sub>\", \"flux\", \"Rdot\" \n"  ) ;
+  	fprintf( file_pointer,"VARIABLES=\"X [m]\", \"potential\", \"Ex [V/m]\", \"n<sub>e</sub>\", \"n<sub>i</sub>\", \"Te [eV]\", \"flux\", \"Rdot\" \n"  ) ;
+  //cout<<"A"<<endl; PetscEnd();
 		fprintf( file_pointer,"ZONE I=%d, DATAPACKING=BLOCK\n", nCell) ;
 		//fprintf( file_pointer,"T =\"ZONE\"\n") ;
 /*--- cell center location ---*/
@@ -1058,6 +1233,7 @@ void output(string filename)
   }
   VecRestoreArray( vout, &value ) ;
 
+
 /*--- electron nunber density. ---*/
   VecScatterBegin( ctx, ele.U0, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, ele.U0, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
@@ -1084,6 +1260,24 @@ void output(string filename)
 
 		for( PetscInt i = 0 ; i < nCell ; i++ ) {
 			fprintf( file_pointer,"%15.6e \t", value[i]*n_ref) ;
+			count++ ;
+			if( count == 6 ) {
+				fprintf( file_pointer,"\n" ) ;
+				count=0 ;
+			}
+		}
+		fprintf( file_pointer,"\n" ) ;
+  }
+  VecRestoreArray( vout, &value ) ;
+
+/*--- electron flux ---*/
+  VecScatterBegin( ctx, ele.T, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
+  VecScatterEnd  ( ctx, ele.T, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
+  VecGetArray( vout, &value ) ;
+  if ( mpi_rank==0 ) {
+
+		for( PetscInt i = 0 ; i < nCell ; i++ ) {
+			fprintf( file_pointer,"%15.6e \t", value[i]*T_ref) ;
 			count++ ;
 			if( count == 6 ) {
 				fprintf( file_pointer,"\n" ) ;
