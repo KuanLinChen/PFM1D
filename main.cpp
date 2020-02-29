@@ -24,8 +24,8 @@ int main(int argc,char **args)
   PetscScalar voltage=0.0, PhyicalTime=0.0 ;
 
 
-  for ( int iCycle=0 ; iCycle < nCycle ; iCycle++ ) {
-    cout<<iCycle<<endl;
+	for ( int iCycle=1 ; iCycle < nCycle ; iCycle++ ) {
+		PetscPrintf(PETSC_COMM_WORLD, "Cyele %d\n", iCycle ) ;
     for ( int iStep=0 ;  iStep <  nStep ;  iStep++ ) {
 
       voltage = V*sin(2.0*PI*(f)*iStep*dt) ;
@@ -39,14 +39,13 @@ int main(int argc,char **args)
       electron_continuity_eqn() ;
       electron_flux() ;
       electron_energy_density_eqn();
-      //PetscEnd();
       Compute_Te();
       //
       ion_continuity_eqn() ;
 
       PhyicalTime += DTime ; 
 
-      if ( (iStep)%200 == 0 and (iCycle+1)%5 == 0 ){
+      if ( (iStep)%(nStep/Output_Step) == 0 and (iCycle+1)%Output_Cycle == 0 ){
         cout<<"out"<<endl;
         output( "./output/flow_"+to_string(iCycle)+"_"+to_string(iStep)+".dat" ) ;
       }
