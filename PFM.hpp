@@ -24,7 +24,7 @@ typedef struct {
 } Species ;
 
 /*--- Mesh & PETSc DMDA parameters ---*/
-PetscInt nCell = 200     ;      // Number of cells.
+PetscInt nCell = 100     ;      // Number of cells.
 PetscInt nNode = nCell+1 ;      // Number of node. (calculated from nCell)
 PetscScalar mesh_factor = 5.0 ; //the grid point will close to the wall wnen value is large.
 
@@ -43,8 +43,8 @@ PetscScalar Amplitude         =     40.0  ; //Applied voltage [V]. (half of peak
 PetscScalar T_background      =     293.0 ;
 PetscScalar N_background      = Pressure_in_torr*133.32/1.38064880E-23/T_background ;
 
-PetscInt nCycle = 51    ;  //Number of cycle you want to simulated.
-PetscInt Output_Cycle = 50    ;  //Number of cycle you want to simulated.
+PetscInt nCycle = 101    ;  //Number of cycle you want to simulated.
+PetscInt Output_Cycle = 100    ;  //Number of cycle you want to simulated.
 PetscInt nStep  = 2000 ;  //Number of step within a cycle.
 PetscInt Output_Step  = 4 ;  //Number of step within a cycle.
 
@@ -300,14 +300,13 @@ void UpdateSourceTerm()
 	DMDAVecGetArray( da, ele.T , &Te ) ;
 	DMDAVecGetArray( da, Rdot, &R_dot ) ;
 	DMDAVecGetArray( da, InelasticLoss, &inelastic_loss ) ;
-	PetscScalar Energy = 5.3 ;
 	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
 
-		Te_unit = Te[i]*T_ref ;
+		Te_unit = Te[i]*T_ref*3.0/2.0 ;
 		//Ne_unit = Ne[i]*n_ref ;
 
-		if( Te_unit > Energy ) {
-			RateConstant = (8.7E-15)*(Te_unit-Energy)*exp(-4.9/sqrt(Te_unit-Energy) )/k_ref ;
+		if( Te_unit > 5.3  ) {
+			RateConstant = (8.7E-15)*(Te_unit-5.3 )*exp(-4.9/sqrt(Te_unit-5.3 ) )/k_ref ;
 		} else {
 			RateConstant = 0.0 ;
 		}
@@ -380,14 +379,14 @@ void Poisson_eqn( PetscScalar left_voltage, PetscScalar right_voltage )
 			col[2].i = i+1 ;
 
 			//wFace 
-			d1  = 0.5*dx[i-1] ;
+			d1 = 0.5*dx[i-1] ;
 			d2 = 0.5*dx[ i ] ;
 			v[0] +=  1.0/(d1+d2) ;
 			v[1] += -1.0/(d1+d2) ;
 
 
 			//eFace 
-			d1  = 0.5*dx[ i ] ;
+			d1 = 0.5*dx[ i ] ;
 			d2 = 0.5*dx[i+1] ;
 			v[1] += -1.0/(d1+d2) ;
 			v[2] +=  1.0/(d1+d2) ;
@@ -514,11 +513,11 @@ void electron_continuity_eqn()
 	DMDAVecGetArray( da, Rdot, &R_dot ) ;
 
 	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
+
 		row.i = i ;
-		 v[0] = 0.0 ;
-		 v[1] = 0.0 ;
-		 v[2] = 0.0 ;
-		 s[i] = 0.0 ;
+		for ( PetscInt k=0 ; k < 3 ; k++ ) v[k] = 0.0 ;
+		s[i] = 0.0 ;
+
 		if ( i==0 ) {
 
 			col[0].i = i  ;
@@ -755,7 +754,6 @@ void ion_continuity_eqn()
 
 		row.i = i ;
 		for ( PetscInt k=0 ; k < 3 ; k++ ) v[k] = 0.0 ;
-
 		s[i] = 0.0 ;
 
 		if ( i==0 ) {
@@ -893,6 +891,7 @@ void electron_energy_density_eqn()
 
 
 	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
+
 		row.i = i ;
 		for ( PetscInt k=0 ; k < 3 ; k++ ) v[k] = 0.0 ;
 		s[i] = 0.0 ;
@@ -952,6 +951,7 @@ void electron_energy_density_eqn()
 			col[0].i = i-1 ;
 			col[1].i = i   ;
 			col[2].i = i+1 ;
+
 			/*--- Unsteady ---*/
 			v [1] += 1.0/dt*dx[i] ; 
 			s[ i ]+= solution_old[i]/dt*dx[i] ;
@@ -1011,7 +1011,7 @@ void electron_energy_density_eqn()
 }
 void Compute_Te()
 {
-	PetscScalar *energy, *Ne, *T ;
+	PetscScalar *energy, *Ne, *T, C23=2.0/3.0/Qe ;
 
 	DMDAVecGetArray( da, ele.T, &T ) ;
 	DMDAVecGetArray( da, ele.U0, &Ne ) ;
@@ -1019,7 +1019,7 @@ void Compute_Te()
 
 
 	for ( PetscInt i=da_info.xs; i < da_info.xs+da_info.xm ; i++ ) {
-		T[ i ] = energy[i]/Ne[i]*2.0/3.0/Qe ;
+		T[ i ] = C23*energy[i]/Ne[i] ;
 	}
 
 	DMDAVecRestoreArray( da, ele.T, &T ) ;
@@ -1037,9 +1037,9 @@ void output(string filename)
   VecScatterCreateToZero( potential, &ctx, &vout ) ;
 	if ( mpi_rank==0 ) {
 
-/*--- Create a new file and write the title and xc points. ---*/
+/*--- Create a new file and write the title and xc points. ---*/ 
   	file_pointer = fopen( filename.c_str(),"w" );
-  	fprintf( file_pointer,"VARIABLES=\"X [m]\", \"potential\", \"Ex [V/m]\", \"n<sub>e</sub>\", \"n<sub>i</sub>\", \"Te [eV]\", \"electron flux\", \"Rdot\", \"Heating\", \"inelastic loss\" \n"  ) ;
+  	fprintf( file_pointer,"VARIABLES=\"X [m]\", \"potential\", \"Ex [V/m]\", \"N<sub>e</sub>\", \"N<sub>i</sub>\", \"N<sub>ε</sub>\", \"Te [eV]\", \"electron flux\", \"Rdot\", \"Heating\", \"inelastic loss\" \n"  ) ;
   //cout<<"A"<<endl; PetscEnd();
 		fprintf( file_pointer,"ZONE I=%d, DATAPACKING=BLOCK\n", nCell) ;
 		//fprintf( file_pointer,"T =\"ZONE\"\n") ;
@@ -1128,7 +1128,25 @@ void output(string filename)
   }
   VecRestoreArray( vout, &value ) ;
 
-/*--- electron flux ---*/
+/*--- electron energy density ---*/
+  VecScatterBegin( ctx, ele.U2, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
+  VecScatterEnd  ( ctx, ele.U2, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
+  VecGetArray( vout, &value ) ;
+  if ( mpi_rank==0 ) {
+
+		for( PetscInt i = 0 ; i < nCell ; i++ ) {
+			fprintf( file_pointer,"%15.6e \t", value[i]*en_ref/Qe) ;
+			count++ ;
+			if( count == 6 ) {
+				fprintf( file_pointer,"\n" ) ;
+				count=0 ;
+			}
+		}
+		fprintf( file_pointer,"\n" ) ;
+  }
+  VecRestoreArray( vout, &value ) ;
+
+/*--- electron temperature ---*/
   VecScatterBegin( ctx, ele.T, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, ele.T, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;

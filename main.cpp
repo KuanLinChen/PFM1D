@@ -29,7 +29,7 @@ int main(int argc,char **args)
     for ( int iStep=0 ;  iStep <  nStep ;  iStep++ ) {
 
       voltage = V*sin(2.0*PI*(f)*iStep*dt) ;
-
+      cout<<voltage<<endl;
       UpdateSourceTerm() ;
       //
       Poisson_eqn( voltage, 0.0 ) ;
