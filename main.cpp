@@ -29,7 +29,7 @@ int main(int argc,char **args)
     for ( int iStep=0 ;  iStep <  nStep ;  iStep++ ) {
 
       voltage = V*sin(2.0*PI*(f)*iStep*dt) ;
-      cout<<voltage<<endl;
+      //cout<<voltage<<endl;
       UpdateSourceTerm() ;
       //
       Poisson_eqn( voltage, 0.0 ) ;
@@ -45,7 +45,7 @@ int main(int argc,char **args)
 
       PhyicalTime += DTime ; 
 
-      if ( (iStep)%(nStep/Output_Step) == 0 and (iCycle+1)%Output_Cycle == 0 ){
+      if ( (iStep)%(nStep/Output_Step) == 0 and (iCycle)%Output_Cycle == 0 ){
         cout<<"out"<<endl;
         output( "./output/flow_"+to_string(iCycle)+"_"+to_string(iStep)+".dat" ) ;
       }

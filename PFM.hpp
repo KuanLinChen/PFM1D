@@ -24,7 +24,7 @@ typedef struct {
 } Species ;
 
 /*--- Mesh & PETSc DMDA parameters ---*/
-PetscInt nCell = 100     ;      // Number of cells.
+PetscInt nCell = 200     ;      // Number of cells.
 PetscInt nNode = nCell+1 ;      // Number of node. (calculated from nCell)
 PetscScalar mesh_factor = 5.0 ; //the grid point will close to the wall wnen value is large.
 
@@ -323,7 +323,7 @@ void UpdateSourceTerm()
 void Poisson_eqn( PetscScalar left_voltage, PetscScalar right_voltage )
 {
 	MatStencil  row, col[3] ;
-	PetscScalar v[3], d1, d2, *source, *Ni, *Ne ;
+	PetscScalar v[3], d1, d2, *source, *Ni, *Ne, eps=epsilon0*1.0 ;
 
 	DMDAVecGetArray( da, poisson.B, &source ) ;
 	DMDAVecGetArray( da, ele.U0, &Ne ) ;
@@ -343,15 +343,15 @@ void Poisson_eqn( PetscScalar left_voltage, PetscScalar right_voltage )
 			//eFace 
 			d1  = 0.5*dx[ i ] ;
 			d2 = 0.5*dx[i+1] ;
-			v[0] += -1.0/(d1+d2) ;
-			v[1] +=  1.0/(d1+d2) ;
+			v[0] += -eps*1.0/(d1+d2) ;
+			v[1] +=  eps*1.0/(d1+d2) ;
 
 			//wFace 
 			d2 = 0.5*dx[ i ] ;
-			v[0] +=  -1.0/(d2) ;
+			v[0] +=  -eps*1.0/(d2) ;
 
 			MatSetValuesStencil( poisson.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
-			source[ i ] = -1.0/(d1)*left_voltage ;
+			source[ i ] = -eps*1.0/(d1)*left_voltage ;
 
 		}else if( i == nCell-1 ) {
 
@@ -361,15 +361,15 @@ void Poisson_eqn( PetscScalar left_voltage, PetscScalar right_voltage )
 			//wFace 
 			d1  = 0.5*dx[i-1] ;
 			d2 = 0.5*dx[ i ] ;
-			v[0] +=  1.0/(d1+d2) ;
-			v[1] += -1.0/(d1+d2) ;
+			v[0] +=  eps*1.0/(d1+d2) ;
+			v[1] += -eps*1.0/(d1+d2) ;
 
 			//eFace 
 			d1  = 0.5*dx[ i ] ;
-			v[1] +=  -1.0/(d1) ;
+			v[1] +=  -eps*1.0/(d1) ;
 
 			MatSetValuesStencil( poisson.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
-			source[ i ] = -1.0/(d1)*right_voltage ;
+			source[ i ] = -eps*1.0/(d1)*right_voltage ;
 
 		} else {
 
@@ -381,21 +381,19 @@ void Poisson_eqn( PetscScalar left_voltage, PetscScalar right_voltage )
 			//wFace 
 			d1 = 0.5*dx[i-1] ;
 			d2 = 0.5*dx[ i ] ;
-			v[0] +=  1.0/(d1+d2) ;
-			v[1] += -1.0/(d1+d2) ;
+			v[0] +=  eps*1.0/(d1+d2) ;
+			v[1] += -eps*1.0/(d1+d2) ;
 
 
 			//eFace 
 			d1 = 0.5*dx[ i ] ;
 			d2 = 0.5*dx[i+1] ;
-			v[1] += -1.0/(d1+d2) ;
-			v[2] +=  1.0/(d1+d2) ;
+			v[1] += -eps*1.0/(d1+d2) ;
+			v[2] +=  eps*1.0/(d1+d2) ;
 			MatSetValuesStencil( poisson.A, 1, &row, 3, col, v, INSERT_VALUES ) ;
 		}
 
-		source[ i ] += -Qe*( Ni[i]-Ne[i] )/epsilon0*dx[i] ;
-		//source[ i ] /= epsilon0 ;
-
+		source[ i ] += -Qe*( Ni[i]-Ne[i] )*dx[i] ;
 	}
 
 	DMDAVecRestoreArray( da, poisson.B, &source ) ;
@@ -539,6 +537,7 @@ void electron_continuity_eqn()
 			v[1] += -D_face/(d1+d2)*( f1(X) ) ;
 
 			/*--- w-face ---*/
+			//v[0] += -D[i]/d1 ;
 			v[0] += -D[i]/d1 ;
 
 			MatSetValuesStencil( electron_continuity.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
@@ -559,12 +558,12 @@ void electron_continuity_eqn()
 			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[i-1] + d1*d1/( d1*d1 + d2*d2 )*  D[ i ] ; 
 			X = sign_q*E_w[i]*Mu_face*(d1+d2)/D_face ;
 			//i-1
-			v[0] += -D_face/(d1+d2)*( f2( X) ) ;
+			v[0] += -D_face/(d1+d2)*( f2(X) ) ;
 			//i
-			v[1] += -D_face/(d1+d2)*(-f1(-X) ) ;
+			v[1] += -D_face/(d1+d2)*(-f1(X) ) ;
 
 			/*--- e-face ---*/
-			v[1] += D[i]/d1 ;
+			v[1] += -D[i]/d2 ;
 
 			MatSetValuesStencil( electron_continuity.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
 
@@ -600,9 +599,7 @@ void electron_continuity_eqn()
 			v[0] += -D_face/(d1+d2)*( f2(X) ) ;
 			//i
 			v[1] += -D_face/(d1+d2)*(-f1(X) ) ;
-			//cout<<"1: "<<v[0]<<" "<<v[1]<<" "<<v[2]<<endl;
-			// cout<<"fw: "<<v[0]<<"\t";
-			// cout<<"fc: "<<v[1]<<"\t"<<1.0-v[2]-v[1] <<endl;
+
 			MatSetValuesStencil( electron_continuity.A, 1, &row, 3, col, v, INSERT_VALUES ) ;
 		}
 		/* Chemical */
@@ -630,7 +627,7 @@ void electron_continuity_eqn()
 void electron_flux()
 {
 	PetscScalar sign_q = ele.sign_q ;
-	PetscScalar v[3], *E_e, *E_w, *D, *Mu, *Ne, *Flux ;
+	PetscScalar *E_e, *E_w, *D, *Mu, *Ne, *Flux ;
 	PetscScalar d1, d2, D_face, Mu_face, X, Fe, Fw ;
 
 	DMDAVecGetArray( da, ele.U0, &Ne ) ;
@@ -653,36 +650,25 @@ void electron_flux()
 			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[ i ] + d1*d1/( d1*d1 + d2*d2 )* Mu[i+1] ; 
 			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[ i ] + d1*d1/( d1*d1 + d2*d2 )*  D[i+1] ; 
 			X = sign_q*E_e[i]*Mu_face*(d1+d2)/D_face ;
-			//i
-			v[0] = -D_face/(d1+d2)*(-f2(X) ) ;
-			//i+1
-			v[1] = -D_face/(d1+d2)*( f1(X) ) ;
-			Fe = v[0]*Ne[i] + v[1]*Ne[i+1] ;
+			Fe = -D_face/(d1+d2)*( f1(X)*Ne[i+1] - f2(X)*Ne[i] );
 
 			/*--- w-face ---*/
-			v[0] = -D[i]/d1 ;
-			Fw=v[0]*Ne[i] ;
+			Fw=D[i]/d1*Ne[i] ;
 
 			Flux[i] = 0.5*(Fw+Fe) ;
 
 		}else if( i == nCell-1 ) {
 
-
-
 			/*--- w-face ---*/
-			d1 = 0.5*dx[i-1] ; d2 = 0.5*dx[ i ] ;
+			d1 = 0.5*dx[i-1] ; 
+			d2 = 0.5*dx[ i ] ;
 			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[i-1] + d1*d1/( d1*d1 + d2*d2 )* Mu[ i ] ; 
 			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[i-1] + d1*d1/( d1*d1 + d2*d2 )*  D[ i ] ; 
 			X = sign_q*E_w[i]*Mu_face*(d1+d2)/D_face ;
-			//i-1
-			v[0] = -D_face/(d1+d2)*( f2( X) ) ;
-			//i
-			v[1] = -D_face/(d1+d2)*(-f1(-X) ) ;
-			Fw = v[0]*Ne[i-1] + v[1]*Ne[i] ;
+			Fw = -D_face/(d1+d2)*( f1(X)*Ne[i] - f2(X)*Ne[i-1] );
 
 			/*--- e-face ---*/
-			v[1] = D[i]/d1 ;
-			Fe = v[1]*Ne[i] ;
+			Fe = -D[i]/d2*Ne[i] ;
 
 			Flux[i] = 0.5*(Fe+Fw) ;
 
@@ -694,11 +680,7 @@ void electron_flux()
 			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[ i ] + d1*d1/( d1*d1 + d2*d2 )* Mu[i+1] ; 
 			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[ i ] + d1*d1/( d1*d1 + d2*d2 )*  D[i+1] ; 
 			X = sign_q*E_e[i]*Mu_face*(d1+d2)/D_face ;
-			//i
-			v[1] = -D_face/(d1+d2)*(-f2(X) ) ;
-			//i+1
-			v[2] = -D_face/(d1+d2)*( f1(X) ) ;
-			Fe = v[1]*Ne[i] + v[2]*Ne[i+1] ;
+			Fe = -D_face/(d1+d2)*( f1(X)*Ne[i+1] - f2(X)*Ne[i] );
 
 
 			/*--- w-face ---*/
@@ -707,11 +689,8 @@ void electron_flux()
 			Mu_face = d2*d2/( d1*d1 + d2*d2 )* Mu[i-1] + d1*d1/( d1*d1 + d2*d2 )* Mu[ i ] ; 
 			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[i-1] + d1*d1/( d1*d1 + d2*d2 )*  D[ i ] ; 
 			X = sign_q*E_w[i]*Mu_face*(d1+d2)/D_face ;
-			//i-1
-			v[0] = -D_face/(d1+d2)*( f2(X) ) ;
-			//i
-			v[1] = -D_face/(d1+d2)*(-f1(X) ) ;
-			Fw = v[0]*Ne[i-1] + v[1]*Ne[i] ;
+
+			Fw = -D_face/(d1+d2)*( f1(X)*Ne[i] - f2(X)*Ne[i-1] );
 
 			Flux[i] = 0.5*(Fe+Fw) ;
 
@@ -774,12 +753,12 @@ void ion_continuity_eqn()
 
 			X = sign_q*E_e[i]*Mu_face*(d1+d2)/D_face ;
 			//i
-			v[0] += -D_face/(d1+d2)*(-f1(X) ) ;
+			v[0] += -D_face/(d1+d2)*(-f2(X) ) ;
 			//i+1
-			v[1] += -D_face/(d1+d2)*( f2(X) ) ;
+			v[1] += -D_face/(d1+d2)*( f1(X) ) ;
 
 			/*--- w-face ---*/
-			//v[0] += max( 0.0, sign_q*Mu[i]*E_w[i]*(-1.0) );
+			v[0] += max( 0.0, sign_q*Mu[i]*E_w[i]*(-1.0) );
 
 			MatSetValuesStencil( ion_continuity.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
 
@@ -793,7 +772,7 @@ void ion_continuity_eqn()
 			s[ i ]+= solution_old[i]/dt*dx[i] ;
 
 			/*--- e-face ---*/
-			//v[1] += max( 0.0, sign_q*Mu[i]*E_e[i]*(1.0));
+			v[1] += max( 0.0, sign_q*Mu[i]*E_e[i]*(1.0));
 
 			/*--- w-face ---*/
 			d1 = 0.5*dx[i-1] ; 
@@ -802,9 +781,9 @@ void ion_continuity_eqn()
 			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[i-1] + d1*d1/( d1*d1 + d2*d2 )*  D[ i ] ; 
 			X = sign_q*E_w[i]*Mu_face*(d1+d2)/D_face ;
 			//i-1
-			v[0] += -D_face/(d1+d2)*( f2( X) ) ;
+			v[0] += -D_face/(d1+d2)*( f2(X) ) ;
 			//i
-			v[1] += -D_face/(d1+d2)*(-f1(-X) ) ;
+			v[1] += -D_face/(d1+d2)*(-f1(X) ) ;
 
 			MatSetValuesStencil( ion_continuity.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
 
@@ -838,7 +817,6 @@ void ion_continuity_eqn()
 			v[0] += -D_face/(d1+d2)*( f2(X) ) ;
 			//i
 			v[1] += -D_face/(d1+d2)*(-f1(X) ) ;
-			//cout<<"1: "<<v[0]<<" "<<v[1]<<" "<<v[2]<<endl;
 			MatSetValuesStencil( ion_continuity.A, 1, &row, 3, col, v, INSERT_VALUES ) ;
 		}
 		/* Chemical */
@@ -918,6 +896,7 @@ void electron_energy_density_eqn()
 			v[1] += -C53*D_face/(d1+d2)*( f1(X) ) ;
 
 			/*--- w-face ---*/
+			//v[0] += -C53*D[i]/d1 ;
 			v[0] += -C53*D[i]/d1 ;
 
 			MatSetValuesStencil( electron_energy.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
@@ -937,12 +916,12 @@ void electron_energy_density_eqn()
 			 D_face = d2*d2/( d1*d1 + d2*d2 )*  D[i-1] + d1*d1/( d1*d1 + d2*d2 )*  D[ i ] ; 
 			X = sign_q*E_w[i]*Mu_face*(d1+d2)/D_face ;
 			//i-1
-			v[0] += -C53*D_face/(d1+d2)*( f2( X) ) ;
+			v[0] += -C53*D_face/(d1+d2)*( f2(X) ) ;
 			//i
-			v[1] += -C53*D_face/(d1+d2)*(-f1(-X) ) ;
+			v[1] += -C53*D_face/(d1+d2)*(-f1(X) ) ;
 
 			/*--- e-face ---*/
-			v[1] += C53*D[i]/d1 ;
+			v[1] += -C53*D[i]/d1 ;
 
 			MatSetValuesStencil( electron_energy.A, 1, &row, 2, col, v, INSERT_VALUES ) ;
 
@@ -1056,6 +1035,7 @@ void output(string filename)
 	}
 
 /*--- Potential ---*/
+	count=0 ;
   VecScatterBegin( ctx, potential, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, potential, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
@@ -1074,6 +1054,7 @@ void output(string filename)
   VecRestoreArray( vout, &value ) ;
 
 /*--- electric field ---*/
+  count=0 ;
   VecScatterBegin( ctx, Ex, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, Ex, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
@@ -1093,6 +1074,7 @@ void output(string filename)
 
 
 /*--- electron nunber density. ---*/
+  count=0 ;
   VecScatterBegin( ctx, ele.U0, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, ele.U0, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
@@ -1111,6 +1093,7 @@ void output(string filename)
   VecRestoreArray( vout, &value ) ;
 
 /*--- ion nunber density. ---*/
+  count=0 ;
   VecScatterBegin( ctx, ion.U0, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, ion.U0, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
@@ -1129,6 +1112,7 @@ void output(string filename)
   VecRestoreArray( vout, &value ) ;
 
 /*--- electron energy density ---*/
+  count=0 ;
   VecScatterBegin( ctx, ele.U2, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, ele.U2, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
@@ -1147,6 +1131,7 @@ void output(string filename)
   VecRestoreArray( vout, &value ) ;
 
 /*--- electron temperature ---*/
+  count=0 ;
   VecScatterBegin( ctx, ele.T, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, ele.T, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
@@ -1165,6 +1150,7 @@ void output(string filename)
   VecRestoreArray( vout, &value ) ;
 
 /*--- electron flux ---*/
+  count=0 ;
   VecScatterBegin( ctx, ele.U1, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, ele.U1, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
@@ -1183,6 +1169,7 @@ void output(string filename)
   VecRestoreArray( vout, &value ) ;
 
 /*--- source term ---*/
+  count=0 ;
   VecScatterBegin( ctx, Rdot, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, Rdot, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
@@ -1201,6 +1188,7 @@ void output(string filename)
   VecRestoreArray( vout, &value ) ;
 
 /*--- Heating term ---*/
+  count=0 ;
   VecScatterBegin( ctx, JouleHeating, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, JouleHeating, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
@@ -1219,7 +1207,8 @@ void output(string filename)
   }
   VecRestoreArray( vout, &value ) ;
 
-/*--- Heating term ---*/
+/*--- Inelastic loss term ---*/
+  count=0 ;
   VecScatterBegin( ctx, InelasticLoss, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecScatterEnd  ( ctx, InelasticLoss, vout, INSERT_VALUES, SCATTER_FORWARD ) ;
   VecGetArray( vout, &value ) ;
