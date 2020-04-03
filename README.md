@@ -1,1 +1,1 @@
-PFM1D
+Plasma fluid modeling code
